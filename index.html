@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8" />
+<title>Starburst Axis Tool</title>
+
+<style>
+  body {
+    margin: 0;
+    background: #111;
+    overflow: hidden;
+    font-family: sans-serif;
+  }
+
+  #controls {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    background: rgba(0,0,0,0.6);
+    padding: 12px;
+    border-radius: 10px;
+    color: #fff;
+  }
+
+  #latlng {
+    position: absolute;
+    bottom: 10px;
+    right: 15px;
+    color: #ccc;
+    font-size: 13px;
+  }
+</style>
+</head>
+
+<body>
+
+<div id="controls">
+  <div>
+    Spacing:
+    <input type="range" id="spacing" min="30" max="150" value="60">
+    <span id="spacingVal">60</span>
+  </div>
+
+  <div>
+    Radius:
+    <input type="range" id="radius" min="40" max="300" value="150">
+    <span id="radiusVal">150</span>
+  </div>
+
+  <div>
+    <button id="toggle">Grid</button>
+  </div>
+</div>
+
+<div id="latlng">lat: 0, lng: 0</div>
+
+<canvas id="canvas"></canvas>
+
+<script>
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+// ---- STATE ----
+let spacing = 60;
+let radius = 150;
+let layout = "grid";
+
+let points = [];
+let mouse = { x: 0, y: 0 };
+
+// ---- Generate points ----
+function generatePoints() {
+  points = [];
+
+  if (layout === "grid") {
+    for (let x = spacing; x < canvas.width; x += spacing) {
+      for (let y = spacing; y < canvas.height; y += spacing) {
+        points.push({ x, y });
+      }
+    }
+  }
+
+  if (layout === "hex") {
+    const h = spacing * Math.sqrt(3) / 2;
+
+    for (let y = spacing; y < canvas.height; y += h) {
+      for (let x = spacing; x < canvas.width; x += spacing) {
+        const offset = Math.floor(y / h) % 2 ? spacing/2 : 0;
+        points.push({ x: x + offset, y });
+      }
+    }
+  }
+}
+
+generatePoints();
+
+// ---- Controls ----
+const spacingInput = document.getElementById("spacing");
+const spacingVal = document.getElementById("spacingVal");
+
+const radiusInput = document.getElementById("radius");
+const radiusVal = document.getElementById("radiusVal");
+
+const toggleBtn = document.getElementById("toggle");
+
+spacingInput.oninput = () => {
+  spacing = +spacingInput.value;
+  spacingVal.textContent = spacing;
+  generatePoints();
+};
+
+radiusInput.oninput = () => {
+  radius = +radiusInput.value;
+  radiusVal.textContent = radius;
+};
+
+toggleBtn.onclick = () => {
+  layout = layout === "grid" ? "hex" : "grid";
+  toggleBtn.textContent = layout === "grid" ? "Grid" : "Hex";
+  generatePoints();
+};
+
+// ---- Mouse ----
+canvas.addEventListener("mousemove", (e) => {
+  mouse.x = e.clientX;
+  mouse.y = e.clientY;
+});
+
+// ---- Helpers ----
+function dist(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function toLatLng(x, y) {
+  const lat = (y / canvas.height * 180 - 90).toFixed(4);
+  const lng = (x / canvas.width * 360 - 180).toFixed(4);
+  return { lat, lng };
+}
+
+// ---- Axis selection (KEY BIT) ----
+// Divide circle into angular slices and take nearest point in each slice
+function getStarburstPoints(center) {
+  const slices = 16; // controls number of rays
+  const angleStep = (Math.PI * 2) / slices;
+
+  const bins = new Array(slices).fill(null);
+
+  for (const p of points) {
+    const dx = p.x - center.x;
+    const dy = p.y - center.y;
+    const d = Math.hypot(dx, dy);
+
+    if (d > radius || d === 0) continue;
+
+    const angle = Math.atan2(dy, dx);
+    let index = Math.floor((angle + Math.PI) / angleStep);
+
+    index = Math.max(0, Math.min(slices - 1, index));
+
+    if (!bins[index] || bins[index].d > d) {
+      bins[index] = { p, d };
+    }
+  }
+
+  return bins.filter(b => b !== null).map(b => b.p);
+}
+
+// ---- Draw ----
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+ // --- find nearest ---
+let nearest = null;
+let nearestDist = Infinity;
+
+for (const p of points) {
+  const d = dist(mouse, p);
+  if (d < nearestDist) {
+    nearestDist = d;
+    nearest = p;
+  }
+}
+
+// ✅ FREE cursor (no snapping)
+let snap = {
+  x: mouse.x,
+  y: mouse.y
+};
+
+// ✅ Optional: subtle magnetic pull (feels organic)
+if (nearest && nearestDist < radius) {
+  const strength = 0.15; // try 0.1–0.25
+  snap.x += (nearest.x - snap.x) * strength;
+  snap.y += (nearest.y - snap.y) * strength;
+}
+
+
+  // --- axis points (clean starburst) ---
+  const starPoints = getStarburstPoints(snap);
+
+  // --- draw all points ---
+  for (const p of points) {
+    const active = starPoints.includes(p);
+
+    ctx.fillStyle = active ? "#1da1ff" : "#444";
+
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, active ? 5 : 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // --- draw rays ---
+  ctx.strokeStyle = "#1da1ff";
+  ctx.lineWidth = 2;
+
+  for (const p of starPoints) {
+    ctx.beginPath();
+    ctx.moveTo(snap.x, snap.y);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+  }
+
+  // --- cursor ---
+  ctx.fillStyle = "#fff";
+  ctx.beginPath();
+  ctx.arc(snap.x, snap.y, 5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // --- lat/lng ---
+  const { lat, lng } = toLatLng(snap.x, snap.y);
+  document.getElementById("latlng").textContent =
+    `lat: ${lat}, lng: ${lng}`;
+
+  requestAnimationFrame(draw);
+}
+
+draw();
+</script>
+
+</body>
+</html>
